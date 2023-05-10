@@ -2,74 +2,89 @@ const fs = require('fs').promises;
 const path = require('path');
 
 const distDir = './06-build-page/project-dist';
-const templateFile = path.join(__dirname, 'template.html');
-const stylePath = path.join(__dirname, 'styles');
-const assetsPath = path.join(__dirname, 'assets');
-const assetsDistPath = path.join(distDir, 'assets');
 
-async function buildPage() {
-  try {
-    if (!await fs.access(distDir)) {
-      await fs.mkdir(distDir);
-    }
-
-    const template = await fs.readFile(templateFile, 'utf-8');
+fs.stat(distDir)
+  .catch(() => {
+    return fs.mkdir(distDir);
+  })
+  .then(() => {
+    const templateFile = path.join(__dirname, 'template.html');
+    return fs.readFile(templateFile, 'utf-8');
+  })
+  .then(template => {
     const regex = /{{(.+?)}}/g;
     const tags = template.match(regex);
 
     let html = template;
-    for (const tag of tags) {
+    return Promise.all(tags.map(tag => {
       const componentName = tag.slice(2, -2).trim() + ".html";
       if (!componentName.endsWith('.html')) {
         throw new Error(`Component file type not allowed for ${componentName}`);
       }
       const componentPath = path.join(__dirname, 'components', componentName);
-      const componentContent = await fs.readFile(componentPath, 'utf-8');
-      html = html.replace(tag, componentContent);
-    }
-
+      return fs.readFile(componentPath, 'utf-8')
+        .then(componentContent => {
+          html = html.replace(tag, componentContent);
+        });
+    })).then(() => {
+      return html;
+    });
+  })
+  .then(html => {
     const indexFile = path.join(distDir, 'index.html');
-    await fs.writeFile(indexFile, html);
-
-    let styleContent = '';
-    for (const file of await fs.readdir(stylePath)) {
-      if (file.endsWith('.css')) {
-        const filePath = path.join(stylePath, file);
-        const fileContent = await fs.readFile(filePath, 'utf-8');
-        styleContent += fileContent;
-      } else {
-        console.warn(`File type not allowed for style ${file}`);
-      }
-    }
-
+    return fs.writeFile(indexFile, html);
+  })
+  .then(() => {
+    const stylePath = path.join(__dirname, 'styles');
     const styleFile = path.join(distDir, 'style.css');
-    await fs.writeFile(styleFile, styleContent);
-
-    if (!await fs.access(assetsDistPath)) {
-      await fs.mkdir(assetsDistPath);
-    }
-    const copyRecursiveSync = async (src, dest) => {
-      const entries = await fs.readdir(src, { withFileTypes: true });
-      for (const entry of entries) {
-        const srcPath = path.join(src, entry.name);
-        const destPath = path.join(dest, entry.name);
-        if (entry.isDirectory()) {
-          await copyRecursiveSync(srcPath, destPath);
-        } else {
-          if (entry.name.endsWith('.html')) {
-            console.warn(`File type not allowed for asset ${entry.name}`);
-            continue;
+    let styleContent = '';
+    return fs.readdir(stylePath)
+      .then(files => {
+        return Promise.all(files.map(file => {
+          if (file.endsWith('.css')) {
+            const filePath = path.join(stylePath, file);
+            return fs.readFile(filePath, 'utf-8')
+              .then(fileContent => {
+                styleContent += fileContent;
+              });
+          } else {
+            console.warn(`File type not allowed for style ${file}`);
+            return Promise.resolve();
           }
-          await fs.copyFile(srcPath, destPath);
-        }
+        })).then(() => {
+          return fs.writeFile(styleFile, styleContent);
+        });
+      });
+  })
+  .then(() => {
+    const assetsPath = path.join(__dirname, 'assets');
+    const assetsDistPath = path.join(distDir, 'assets');
+    const copyRecursiveSync = async (src, dest) => {
+      try {
+        const entries = await fs.readdir(src, { withFileTypes: true });
+        await fs.mkdir(dest);
+        await Promise.all(entries.map(async entry => {
+          const srcPath = path.join(src, entry.name);
+          const destPath = path.join(dest, entry.name);
+          if (entry.isDirectory()) {
+            await copyRecursiveSync(srcPath, destPath);
+          } else {
+            if (entry.name.endsWith('.html')) {
+              console.warn(`File type not allowed for asset ${entry.name}`);
+              return;
+            }
+            await fs.copyFile(srcPath, destPath);
+          }
+        }));
+      } catch (err) {
+        console.error(err);
       }
     };
-    await copyRecursiveSync(assetsPath, assetsDistPath);
-
+    return copyRecursiveSync(assetsPath, assetsDistPath);
+  })
+  .then(() => {
     console.log('Page successfully built!');
-  } catch (error) {
-    console.error(error);
-  }
-}
-
-buildPage();
+  })
+  .catch(err => {
+    console.error(err);
+  });
